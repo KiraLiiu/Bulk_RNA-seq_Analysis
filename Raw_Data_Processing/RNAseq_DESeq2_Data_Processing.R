@@ -9,7 +9,7 @@
 #############################################################################
 
 ### Step 1: Load Required Packages ###########################################
-#library(openxlsx)    # For Excel file handling (if needed)
+#library(openxlsx)    # read.xlss For Excel file handling (recommended)
 library(tidyverse)   # For data manipulation and visualization
 library(DESeq2)      # For differential expression analysis
 library(data.table)  # For efficient data reading (fread)
@@ -17,45 +17,34 @@ library(data.table)  # For efficient data reading (fread)
 
 ### Step 2: Load and Prepare Data ##########################################
 # Read count matrix
-count_matrix <- fread("./20250210_dCas9_met_enzyme_expcount_all.txt")
+count_matrix <- fread("./count_matrix.txt")
 
 # format the count matrix
 count_matrix <- data.frame(count_matrix)
 rownames(count_matrix) <- count_matrix[,1]
 count_matrix <- count_matrix[,-1]
 
-
-# Format the count matrix
-# - Set first column as rownames
-# - Remove the first column after setting as rownames
-sample <- colnames(count_matrix)
-
+# read.csv or read.xlsx are functions recommended to load files without formatting data frame
+# count_matrix <- read.csv("./count_matrix.csv", row.names = TRUE)
 
 ### Step 3: Create Sample Information #####################################
-# Create sample information dataframe
-sample_info <- data.frame(
-  ID = c(sample[1:4], sample[4:8], sample[9:12], sample[13:16], sample[17:20], sample[21:24]),
-  Group = rep(c("WT", "ACSS2", "AHCY", "MAT2A", "NMNAT1", "GDH"), each = 4) 
-)
+# Read Sample Info
+sample_info <- read.csv("./sample_info")
 
 # Check sample counts before running analysis
 unique(sample_info$Group)
 table(sample_info$Group)
 
 
-
 ### Step 4: Define Analysis Parameters ###################################
 # Define groups and comparisons
-groups <- c("WT", "ACSS2", "AHCY", "MAT2A", "NMNAT1", "GDH")
+groups <- c("Control", "Experimental1", "Experimental2")
 
 # Define comparisons
 # Format: list of c("Experimental", "Control") pairs
 comparisons <- list(
-  c("ACSS2", "WT"),
-  c("AHCY", "WT"),
-  c("MAT2A", "WT"),
-  c("NMNAT1", "WT"),
-  c("GDH", "WT")
+  c("Experimental1", "Control"),
+  c("Experimental2", "Control")
   )
 
 
@@ -115,5 +104,5 @@ vst_obj_simple <- results_simple$vsd_object
 
 ### Optional: Example of Additional Analysis ###########################
 # Example: Get significant genes for a specific comparison
-sig_genes <- subset(raw_results[["ACSS2 vs WT"]], 
+sig_genes <- subset(raw_results[["Experimental1 vs Control"]], 
                     padj < 0.05 & abs(log2FoldChange) > 1)
