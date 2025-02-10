@@ -1,10 +1,33 @@
-# RNA-seq Analysis Pipeline Functions with Multi-group Comparison
+###############################################################################
+#                     RNA-seq Analysis Pipeline Documentation                   #
+#                                                                               #
+# This pipeline performs differential expression analysis using DESeq2 with     #
+# support for multiple group comparisons, visualizations, and gene annotation.  #
+###############################################################################
+
+# Required Packages:
+# - dplyr: Data manipulation
+# - DESeq2: Differential expression analysis
+# - AnnotationDbi: Gene annotation tools
+# - pheatmap: Heatmap visualization
+# - tidyr: Data tidying
+# - org.Mm.eg.db: Mouse genome database (for mouse data)
+# - org.Hs.eg.db: Human genome database (for human data)
+# Note: Choose the appropriate organism database for your data
+
+# Install required packages if needed:
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install(c("DESeq2", "AnnotationDbi", "org.Mm.eg.db"))
+install.packages(c("dplyr", "pheatmap", "tidyr"))
+
+# Load required libraries
 library(dplyr)
 library(DESeq2)
 library(AnnotationDbi)
 library(pheatmap)
 library(tidyr)
-library(org.Mm.eg.db)
+library(org.Mm.eg.db)  # or org.Hs.eg.db for human data
 
 #' Create condition table for multiple groups
 #' @param sample_info Sample metadata dataframe
@@ -25,6 +48,65 @@ create_condition_table <- function(sample_info, id_col, group_col, groups) {
   colnames(sample_info_selected)[1] <- "ID"
   return(sample_info_selected)
 }
+
+#' Validate sample groups and comparisons
+#' @param condition_table Condition table with sample information
+#' @param groups Vector of group names
+#' @param comparisons List of pairwise comparisons
+#' @return List with validation results and messages
+validate_groups <- function(condition_table, groups, comparisons) {
+  # Check sample counts for each group
+  group_counts <- table(condition_table$condition)
+  
+  # Identify groups with no samples
+  missing_groups <- groups[!groups %in% names(group_counts)]
+  if (length(missing_groups) > 0) {
+    stop("The following groups have no samples: ", 
+         paste(missing_groups, collapse = ", "))
+  }
+  
+  # Check sample counts
+  low_sample_groups <- names(group_counts)[group_counts < 2]
+  if (length(low_sample_groups) > 0) {
+    warning("The following groups have less than 2 samples: ",
+            paste(low_sample_groups, collapse = ", "))
+  }
+  
+  # Validate comparisons
+  invalid_comparisons <- list()
+  valid_comparisons <- list()
+  
+  for (comp in comparisons) {
+    group1 <- comp[1]
+    group2 <- comp[2]
+    
+    # Check if both groups exist and have samples
+    if (!all(c(group1, group2) %in% names(group_counts))) {
+      invalid_comparisons[[length(invalid_comparisons) + 1]] <- comp
+      next
+    }
+    
+    # Check if both groups have enough samples
+    if (group_counts[group1] < 2 || group_counts[group2] < 2) {
+      warning("Comparison ", group1, " vs ", group2, 
+              " has groups with less than 2 samples")
+    }
+    
+    valid_comparisons[[length(valid_comparisons) + 1]] <- comp
+  }
+  
+  if (length(invalid_comparisons) > 0) {
+    stop("Invalid comparisons found: ", 
+         paste(sapply(invalid_comparisons, paste, collapse=" vs "), collapse=", "))
+  }
+  
+  # Print sample counts for each group
+  message("Sample counts per group:")
+  print(group_counts)
+  
+  return(valid_comparisons)
+}
+
 
 #' Prepare count matrix for DESeq2
 #' @param count_matrix Raw count matrix
@@ -124,7 +206,6 @@ annotate_results <- function(deseq_results,
   
   return(annotated_results)
 }
-
 
 #' Generate PCA plot for a subset of samples
 #' @param vst_counts VST-transformed count data
@@ -369,6 +450,51 @@ run_deseq2_analysis <- function(count_matrix, condition_table, comparisons,
   ))
 }
 
+
+
+#' Extract raw DESeq2 results and normalized counts
+#' @param deseq_results Results from DESeq2 analysis
+#' @param output_dir Directory for saving results
+#' @return List of raw results and normalized counts
+get_raw_results <- function(deseq_results, output_dir) {
+  # Get normalized counts (both VST and size-factor normalized)
+  vst_counts <- as.data.frame(assay(deseq_results$vsd))
+  size_normalized <- as.data.frame(counts(deseq_results$dds, normalized=TRUE))
+  
+  # Process DESeq2 results for each comparison
+  raw_results <- list()
+  for (comparison_name in names(deseq_results$results)) {
+    # Convert DESeq2 results to data frame
+    res_df <- as.data.frame(deseq_results$results[[comparison_name]])
+    res_df$gene_id <- rownames(res_df)
+    
+    # Reorder columns to put gene_id first
+    res_df <- res_df[, c("gene_id", setdiff(colnames(res_df), "gene_id"))]
+    
+    # Save to file
+    write.csv(res_df,
+              file = file.path(output_dir, paste0("DESeq2_", comparison_name, "_results.csv")),
+              row.names = FALSE)
+    
+    raw_results[[comparison_name]] <- res_df
+  }
+  
+  # Save normalized counts
+  write.csv(vst_counts,
+            file = file.path(output_dir, "vst_normalized_counts.csv"),
+            row.names = TRUE)
+  write.csv(size_normalized,
+            file = file.path(output_dir, "size_factor_normalized_counts.csv"),
+            row.names = TRUE)
+  
+  return(list(
+    raw_results = raw_results,
+    vst_counts = vst_counts,
+    size_normalized_counts = size_normalized
+  ))
+}
+
+
 #' Main RNA-seq analysis function for multiple groups (updated with validation)
 #' @param count_matrix Pre-loaded count matrix
 #' @param sample_info Pre-loaded sample information
@@ -414,13 +540,13 @@ analyze_rnaseq_multi <- function(count_matrix,
   deseq_results <- run_deseq2_analysis(
     filtered_counts, condition_table, valid_comparisons
   )
-  
+
   # Annotate results
   message("\nAnnotating results...")
   annotated_results <- annotate_results(
     deseq_results, organism_db
   )
-  
+
   # Generate plots
   message("\nGenerating plots...")
   generate_plots(
@@ -450,35 +576,71 @@ analyze_rnaseq_multi <- function(count_matrix,
 
 
 
+#' Simple DESeq2 analysis function without annotation
+#' @param count_matrix Pre-loaded count matrix
+#' @param sample_info Pre-loaded sample information
+#' @param groups Vector of group names to include
+#' @param comparisons List of pairwise comparisons
+#' @param id_col Column name containing sample IDs
+#' @param group_col Column name containing group information
+#' @param min_count Minimum count threshold for filtering
+#' @param output_dir Directory for saving results
+#' @return List containing analysis results
+analyze_rnaseq_simple <- function(count_matrix,
+                                  sample_info,
+                                  groups,
+                                  comparisons,
+                                  id_col = "ID",
+                                  group_col = "Group",
+                                  min_count = 10,
+                                  output_dir = "results") {
+  
+  # Create condition table for all groups
+  condition_table <- create_condition_table(
+    sample_info, id_col, group_col, groups
+  )
+  
+  # Validate groups and comparisons
+  message("Validating sample groups and comparisons...")
+  valid_comparisons <- validate_groups(condition_table, groups, comparisons)
+  
+  # Print sample information
+  message("\nSample information:")
+  print(table(condition_table$condition))
+  
+  # Prepare count matrix
+  message("\nPreparing count matrix...")
+  filtered_counts <- prepare_count_matrix(
+    count_matrix, condition_table, min_count
+  )
+  
+  # Run DESeq2 analysis
+  message("\nRunning DESeq2 analysis...")
+  deseq_results <- run_deseq2_analysis(
+    filtered_counts, condition_table, valid_comparisons
+  )
+  
+  # Generate plots
+  message("\nGenerating plots...")
+  generate_plots(
+    deseq_results,
+    output_dir = file.path(output_dir, "plots"),
+    comparisons = valid_comparisons
+  )
+  
+  # Get and save raw results
+  message("\nExtracting and saving results...")
+  raw_results <- get_raw_results(deseq_results, output_dir)
+  
+  message("\nAnalysis complete!")
+  return(list(
+    deseq_object = deseq_results$dds,
+    vsd_object = deseq_results$vsd,
+    raw_results = raw_results$raw_results,
+    vst_counts = raw_results$vst_counts,
+    size_normalized_counts = raw_results$size_normalized_counts,
+    condition_table = condition_table
+  ))
+}
 
-# Example usage
-# Load your data first
-count_matrix <- read.xlsx("./", sheet = 1)
-sample_info <- read.xlsx("./", sheet = 1)
 
-## SampleID  Group ##
-## Sample1   KO1   ##
-## Sample2   KO1   ##
-## Sample3   KO2   ##
-## Sample4   KO2   ##
-## Sample5   WT    ##
-## Sample6   WT    ##
-
-# Check sample counts before running analysis
-table(sample_info$Group)
-
-# Define groups and comparisons
-groups <- c("WT", "KO1", "KO2")
-comparisons <- list(
-  c("KO1", "WT"),
-  c("KO2", "WT")
-)
-
-# Run analysis
-results <- analyze_rnaseq_multi(
-  count_matrix = count_matrix,
-  sample_info = sample_info,
-  groups = groups,
-  comparisons = comparisons,
-  output_dir = "RNA-seq_DESeq_results"
-)
